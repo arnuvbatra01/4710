@@ -1,0 +1,6 @@
+<testsuites name="results">
+  <testsuite name="all" package="all">
+    <property name="random_seed" value="12345" />
+    <testcase name="test_rca4" classname="testbench" file="/workspaces/4710/hw1-systemverilog/testbench.py" lineno="214" time="0.018351316452026367" sim_time_ns="1025.0" ratio_time="55854.30356887659" />
+  </testsuite>
+</testsuites>
