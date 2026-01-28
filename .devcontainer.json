@@ -1,0 +1,11 @@
+{
+    "image": "cis5710/hw-base-arm:latest",
+
+    "forwardAgent": true,
+
+    "customizations": {
+    "vscode": {
+        "extensions": ["mshr-h.veriloghdl", "lramseyer.vaporview", "ms-python.python"]
+    }
+  }
+}
