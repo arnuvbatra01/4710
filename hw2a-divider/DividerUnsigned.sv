@@ -1,4 +1,4 @@
-/* INSERT NAME AND PENNKEY HERE */
+/* Arnuv Batra (86229518)*/
 
 `timescale 1ns / 1ns
 
