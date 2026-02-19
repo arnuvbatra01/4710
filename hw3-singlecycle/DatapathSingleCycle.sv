@@ -244,6 +244,8 @@ module DatapathSingleCycle (
     rs1_data, cla_b, (cla_cin), cla_sum
  );
 
+ DividerUnsigned div ()
+
  logic illegal_insn;
  logic we;
  logic [`REG_SIZE] output_d;
@@ -251,6 +253,7 @@ module DatapathSingleCycle (
  logic [7:0] selected_byte;
  logic [1:0] load_byte_offset;
  logic [31:0] load_addr;
+ logic [63:0] large_mul;
 
  always_comb begin
  illegal_insn = 1'b0;
@@ -264,8 +267,9 @@ module DatapathSingleCycle (
  addr_to_dmem = '0;
  load_addr = '0;
  load_byte_offset = '0;
-  store_we_to_dmem = 4'b0;
-  store_data_to_dmem = '0; 
+ store_we_to_dmem = 4'b0;
+ store_data_to_dmem = '0; 
+ large_mul = '0;
 
  trace_completed_pc = pcCurrent;
  trace_completed_insn = insn_from_imem;
@@ -351,7 +355,24 @@ module DatapathSingleCycle (
  else if (insn_mul | insn_mulh | insn_mulhsu | insn_mulhu | insn_div | insn_divu | insn_rem | insn_remu) begin
  // TODO: Implement M-extension instructions
   
- illegal_insn = 1'b1;
+  if (insn_mul) begin
+    large_mul = {1'b0, rs1_data} * {1'b0, rs2_data};
+    output_d = large_mul[31:0];
+  end
+  else if (insn_mulh) begin
+    large_mul = (($signed(rs1_data) * $signed(rs2_data)));
+    output_d = large_mul[63:32];
+  end
+  else if (insn_mulhsu) begin
+    large_mul = $signed(rs1_data) * $signed({1'b0, rs2_data});
+    output_d = large_mul[63:32];
+  end
+  else if (insn_mulhu) begin
+    large_mul = {1'b0, rs1_data} * {1'b0, rs2_data};
+    output_d = large_mul[63:32];
+  end
+  else illegal_insn = 1'b1;
+
  end
  else begin
  illegal_insn = 1'b1;
