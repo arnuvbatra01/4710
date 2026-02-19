@@ -248,6 +248,9 @@ module DatapathSingleCycle (
  logic we;
  logic [`REG_SIZE] output_d;
  logic [4:0] dest;
+ logic [7:0] selected_byte;
+ logic [1:0] load_byte_offset;
+ logic [31:0] load_addr;
 
  always_comb begin
  illegal_insn = 1'b0;
@@ -257,6 +260,10 @@ module DatapathSingleCycle (
  pcNext = pcCurrent + 4;
  cla_b = '0;
  cla_cin = '0;
+ selected_byte = 8'b0;
+ addr_to_dmem = '0;
+ load_addr = '0;
+ load_byte_offset = '0;
 
  trace_completed_pc = pcCurrent;
  trace_completed_insn = insn_from_imem;
@@ -350,8 +357,52 @@ module DatapathSingleCycle (
 
  OpLoad: begin
  // TODO: Implement load instructions
- illegal_insn = 1'b1;
+  we = '1;
+  load_addr = rs1_data + imm_i_sext;
+  load_byte_offset = load_addr[1:0];
+  addr_to_dmem = {load_addr[31:2], 2'b00};  // align to 4B
+
+  case (load_byte_offset)
+        2'b00: selected_byte = load_data_from_dmem[7:0];
+        2'b01: selected_byte = load_data_from_dmem[15:8];
+        2'b10: selected_byte = load_data_from_dmem[23:16];
+        2'b11: selected_byte = load_data_from_dmem[31:24];
+        default: selected_byte = 8'b0;
+  endcase
+
+ if (insn_lb) begin
+  output_d = {{24{selected_byte[7]}}, selected_byte};
  end
+ else if (insn_lh) begin
+  // case here for 2-byte selection
+
+  if (load_addr[1:0] == 2'b00) begin
+    output_d = {{16{load_data_from_dmem[15]}}, load_data_from_dmem[15:0]};
+  end
+  else if (load_addr[1:0] == 2'b10) begin
+    output_d = {{16{load_data_from_dmem[31]}}, load_data_from_dmem[31:16]};
+  end
+ end
+
+else if (insn_lw) begin
+  output_d = load_data_from_dmem;
+end
+
+else if (insn_lbu) begin
+  output_d = {24'b0, selected_byte};
+end
+else if (insn_lhu) begin
+
+    if (load_addr[1:0] == 2'b00) begin
+    output_d = {16'b0, load_data_from_dmem[15:0]};
+  end
+  else if (load_addr[1:0] == 2'b10) begin
+    output_d = {16'b0, load_data_from_dmem[31:16]};
+  end
+
+end
+ end
+
 
  OpStore: begin
  // TODO: Implement store instructions
