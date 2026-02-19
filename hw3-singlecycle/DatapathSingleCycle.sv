@@ -264,6 +264,8 @@ module DatapathSingleCycle (
  addr_to_dmem = '0;
  load_addr = '0;
  load_byte_offset = '0;
+  store_we_to_dmem = 4'b0;
+  store_data_to_dmem = '0; 
 
  trace_completed_pc = pcCurrent;
  trace_completed_insn = insn_from_imem;
@@ -407,6 +409,48 @@ end
  OpStore: begin
  // TODO: Implement store instructions
  we = 1'b0;
+ load_addr = rs1_data + imm_s_sext;
+ addr_to_dmem = {load_addr[31:2], 2'b00};
+
+  if (insn_sb) begin
+
+    if (load_addr[1:0] == 2'b00) begin
+      store_we_to_dmem = 4'b1;
+      store_data_to_dmem = {24'b0, rs2_data[7:0]};
+    end
+    else if (load_addr[1:0] == 2'b01) begin
+      store_we_to_dmem = 4'b10;
+      store_data_to_dmem = {{16'b0, rs2_data[7:0]} , 8'b0};
+    end
+    else if (load_addr[1:0] == 2'b10) begin
+      store_we_to_dmem = 4'b100;
+      store_data_to_dmem = {{8'b0, rs2_data[7:0]} , 16'b0};
+    end
+    else if (load_addr[1:0] == 2'b11) begin
+      store_we_to_dmem = 4'b1000;
+      store_data_to_dmem = {rs2_data[7:0], 24'b0};
+    end
+    else illegal_insn = 1'b1;
+
+  end
+
+  else if (insn_sh) begin
+
+    if (load_addr[1:0] == 2'b00) begin
+      store_we_to_dmem = 4'b11;
+      store_data_to_dmem = {16'b0, rs2_data[15:0]};
+    end
+    else if (load_addr[1:0] == 2'b10) begin
+      store_we_to_dmem = 4'b1100;
+      store_data_to_dmem = {rs2_data[15:0] , 16'b0};
+    end
+
+  end
+
+  else if (insn_sw) begin
+    store_we_to_dmem = 4'b1111;
+    store_data_to_dmem = rs2_data;
+  end
  end
 
  OpBranch: begin
@@ -435,14 +479,16 @@ end
 
  OpJal: begin
  // TODO: Implement jal instruction
- output_d = pcCurrent + 4;
  we = 1;
+ rd_data = pcCurrent + 4;
+ pcNext = pcCurrent + imm_j_sext;
+
  end
 
  OpJalr: begin
  // TODO: Implement jalr instruction
- output_d = pcCurrent + 4;
  we = 1;
+ 
  end
 
  OpAuipc: begin
