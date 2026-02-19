@@ -480,7 +480,7 @@ end
  OpJal: begin
  // TODO: Implement jal instruction
  we = 1;
- rd_data = pcCurrent + 4;
+ output_d = pcCurrent + 4;
  pcNext = pcCurrent + imm_j_sext;
 
  end
@@ -488,7 +488,9 @@ end
  OpJalr: begin
  // TODO: Implement jalr instruction
  we = 1;
- 
+ output_d = pcCurrent + 4;
+ pcNext = (rs1_data + imm_i_sext) & ~32'h1;
+
  end
 
  OpAuipc: begin
