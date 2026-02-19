@@ -240,8 +240,8 @@ module DatapathSingleCycle (
   logic cla_cin;
   logic [`REG_SIZE] div_rem;
   logic [`REG_SIZE] div_q;
-  wire [31:0] div_b_input;
-  wire [31:0] div_a_input;
+  logic [31:0] div_b_input;
+  logic [31:0] div_a_input;
 
 
   CarryLookaheadAdder cla (
