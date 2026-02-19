@@ -236,15 +236,19 @@ module DatapathSingleCycle (
  .rs2_data(rs2_data));
 
   logic [`REG_SIZE] cla_b;
-   logic [`REG_SIZE] cla_sum;
+  logic [`REG_SIZE] cla_sum;
   logic cla_cin;
+  logic [`REG_SIZE] div_rem;
+  logic [`REG_SIZE] div_q;
+  wire [31:0] div_b_input;
+  wire [31:0] div_a_input;
 
 
   CarryLookaheadAdder cla (
     rs1_data, cla_b, (cla_cin), cla_sum
  );
 
- DividerUnsigned div ()
+ DividerUnsigned div (div_a_input, div_b_input, div_rem, div_q);
 
  logic illegal_insn;
  logic we;
@@ -254,6 +258,7 @@ module DatapathSingleCycle (
  logic [1:0] load_byte_offset;
  logic [31:0] load_addr;
  logic [63:0] large_mul;
+
 
  always_comb begin
  illegal_insn = 1'b0;
@@ -270,6 +275,9 @@ module DatapathSingleCycle (
  store_we_to_dmem = 4'b0;
  store_data_to_dmem = '0; 
  large_mul = '0;
+ div_b_input = '0;
+ div_a_input = '0;
+
 
  trace_completed_pc = pcCurrent;
  trace_completed_insn = insn_from_imem;
@@ -371,6 +379,44 @@ module DatapathSingleCycle (
     large_mul = {1'b0, rs1_data} * {1'b0, rs2_data};
     output_d = large_mul[63:32];
   end
+  else if (insn_div) begin
+
+    if (rs2_data[31]) begin
+      div_b_input = -rs2_data;
+    end
+    else div_b_input = rs2_data;
+    if (rs1_data[31]) begin
+      div_a_input = -rs1_data;
+    end
+    else div_a_input = rs1_data;
+    
+    output_d = (rs1_data[31] == rs2_data[31]) ? div_q : (-div_q);
+  end
+  else if (insn_divu) begin
+    div_b_input = rs2_data;
+    div_a_input = rs1_data;
+    output_d = div_q;
+  end
+
+  else if (insn_rem) begin
+    if (rs2_data[31]) begin
+      div_b_input = -rs2_data;
+    end
+    else div_b_input = rs2_data;
+    if (rs1_data[31]) begin
+      div_a_input = -rs1_data;
+    end
+    else div_a_input = rs1_data;
+    
+    output_d = rs1_data[31] ? -div_rem : div_rem;
+  end
+
+  else if (insn_remu) begin
+    div_b_input = rs2_data;
+    div_a_input = rs1_data;
+    output_d = div_rem;
+  end
+
   else illegal_insn = 1'b1;
 
  end
