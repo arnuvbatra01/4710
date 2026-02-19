@@ -382,16 +382,16 @@ module DatapathSingleCycle (
   else if (insn_div) begin
 
     if (rs2_data[31]) begin
-      div_b_input = -rs2_data;
+      div_b_input = ~(rs2_data) + 1;
     end
     else div_b_input = rs2_data;
     if (rs1_data[31]) begin
-      div_a_input = -rs1_data;
+      div_a_input = ~(rs1_data) + 1;
     end
     else div_a_input = rs1_data;
     
     if (|rs2_data)
-    output_d = (rs1_data[31] == rs2_data[31]) ? div_q : (-div_q);
+    output_d = (rs1_data[31] == rs2_data[31]) ? div_q : (~(div_q) + 1);
     else 
     output_d = 32'hFFFFFFFF;
   end
@@ -412,15 +412,15 @@ module DatapathSingleCycle (
     end
 
     if (rs2_data[31]) begin
-      div_b_input = -rs2_data;
+      div_b_input = ~(rs2_data) + 1;
     end
     else div_b_input = rs2_data;
     if (rs1_data[31]) begin
-      div_a_input = -rs1_data;
+      div_a_input = ~(rs1_data) + 1;
     end
     else div_a_input = rs1_data;
-    
-    output_d = rs1_data[31] ? -div_rem : div_rem;
+
+    output_d = rs1_data[31] ? (~div_rem + 1) : div_rem;
   end
 
   else if (insn_remu) begin
