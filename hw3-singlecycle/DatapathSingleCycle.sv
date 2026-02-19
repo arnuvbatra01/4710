@@ -364,7 +364,7 @@ module DatapathSingleCycle (
  // TODO: Implement M-extension instructions
   
   if (insn_mul) begin
-    large_mul = {1'b0, rs1_data} * {1'b0, rs2_data};
+    large_mul = $signed(rs1_data) * $signed(rs2_data);
     output_d = large_mul[31:0];
   end
   else if (insn_mulh) begin
@@ -563,6 +563,7 @@ end
 
  OpAuipc: begin
  // TODO: Implement auipc instruction
+ we = 1;
  output_d = pcCurrent + (insn_from_imem[31:12] << 12);
  end
 
