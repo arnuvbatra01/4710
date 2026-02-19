@@ -350,6 +350,7 @@ module DatapathSingleCycle (
  end
  else if (insn_mul | insn_mulh | insn_mulhsu | insn_mulhu | insn_div | insn_divu | insn_rem | insn_remu) begin
  // TODO: Implement M-extension instructions
+  
  illegal_insn = 1'b1;
  end
  else begin
@@ -495,7 +496,7 @@ end
 
  OpAuipc: begin
  // TODO: Implement auipc instruction
- illegal_insn = 1'b1;
+ output_d = pcCurrent + (insn_from_imem[31:12] << 12);
  end
 
  OpEnviron: begin
