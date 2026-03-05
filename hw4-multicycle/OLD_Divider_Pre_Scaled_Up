@@ -1,0 +1,296 @@
+// Arnuv Batrs (86229518)
+
+
+
+`timescale 1ns / 1ns
+
+
+
+// quotient = dividend / divisor
+
+
+
+module DividerUnsignedPipelined (
+
+input wire clk, rst, stall,
+
+input wire [31:0] i_dividend,
+
+input wire [31:0] i_divisor,
+
+output logic [31:0] o_remainder,
+
+output logic [31:0] o_quotient
+
+);
+
+
+
+// TODO: your code here
+
+genvar i;
+
+genvar j;
+
+logic [31:0] cdividend [0:32];
+
+logic [31:0] cremainder [0:32];
+
+logic [31:0] cquotient [0:32];
+
+logic [31:0] cdivisor [0:32];
+
+
+
+reg [31:0] r_reg [0:6];
+
+reg [31:0] q_reg [0:6];
+
+reg [31:0] divd_reg [0:6];
+
+reg [31:0] div_reg [0:6];
+
+
+
+logic [31:0] next_r_reg_0;
+
+logic [31:0] next_q_reg_0;
+
+logic [31:0] next_divd_reg_0;
+
+
+
+logic [31:0] next_r_reg_1;
+
+logic [31:0] next_q_reg_1;
+
+logic [31:0] next_divd_reg_1;
+
+
+
+assign cdividend [0] = i_dividend;
+
+assign cremainder[0] = '0;
+
+assign cquotient[0] = '0;
+
+assign cdivisor[0] = i_divisor;
+
+
+
+assign o_remainder = cremainder[32];
+
+assign o_quotient = cquotient[32];
+
+
+
+generate
+
+for(i = 0; i < 3; i = i+1) begin
+
+divu_1iter b1 (cdividend[i],
+
+cdivisor[0],
+
+cremainder[i],
+
+cquotient[i],
+
+cdividend[i+1],
+
+cremainder[i+1],
+
+cquotient[i+1]);
+
+end
+
+
+
+endgenerate
+
+
+
+divu_1iter r0i (cdividend[3],
+
+cdivisor[0],
+
+cremainder[3],
+
+cquotient[3],
+
+next_divd_reg_0,
+
+next_r_reg_0,
+
+next_q_reg_0);
+
+
+
+divu_1iter r0o (divd_reg[0],
+
+div_reg[0],
+
+r_reg[0],
+
+q_reg[0],
+
+cdividend[5],
+
+cremainder[5],
+
+cquotient[5]);
+
+
+
+
+
+
+
+
+
+generate
+
+for(i = 5; i < 7; i = i+1) begin
+
+divu_1iter b1 (cdividend[i],
+
+div_reg[0],
+
+cremainder[i],
+
+cquotient[i],
+
+cdividend[i+1],
+
+cremainder[i+1],
+
+cquotient[i+1]);
+
+end
+
+
+
+endgenerate
+
+
+
+
+
+divu_1iter r1i (cdividend[7],
+
+div_reg[0],
+
+cremainder[7],
+
+cquotient[7],
+
+next_divd_reg_1,
+
+next_r_reg_1,
+
+next_q_reg_1);
+
+
+
+
+
+
+
+
+
+
+
+always_ff @(posedge clk) begin
+
+
+
+if (rst) begin
+
+for (int j = 0; j < 7; j++) begin
+
+r_reg[j] <= '0;
+
+q_reg[j] <= '0;
+
+div_reg[j] <= '0;
+
+divd_reg[j] <= '0;
+
+end
+
+end
+
+
+
+else if begin
+
+r_reg[0] <= next_r_reg_0;
+
+q_reg[0] <= next_q_reg_0;
+
+div_reg[0] <= cdivisor[0];
+
+divd_reg[0] <= next_divd_reg_0;
+
+
+
+r_reg[1] <= next_r_reg_1;
+
+q_reg[1] <= next_q_reg_1;
+
+div_reg[1] <= div_reg[0];
+
+divd_reg[1] <= next_divd_reg_1;
+
+
+end
+
+end
+
+
+
+endmodule
+
+
+
+
+
+module divu_1iter (
+
+input wire [31:0] i_dividend,
+
+input wire [31:0] i_divisor,
+
+input wire [31:0] i_remainder,
+
+input wire [31:0] i_quotient,
+
+output logic [31:0] o_dividend,
+
+output logic [31:0] o_remainder,
+
+output logic [31:0] o_quotient
+
+);
+
+
+
+// TODO: copy your code from HW2A here
+
+wire [31:0] rnew;
+
+assign rnew = i_remainder << 1 | (i_dividend >> 31 & 32'h1);
+
+
+
+wire obit = rnew >= i_divisor;
+
+assign o_remainder = obit ? (rnew - i_divisor) : rnew;
+
+assign o_quotient = (i_quotient << 1) | ({{31{1'b0}}, obit});
+
+assign o_dividend = i_dividend << 1;
+
+
+
+endmodule
