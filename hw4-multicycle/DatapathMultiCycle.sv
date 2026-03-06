@@ -74,7 +74,6 @@ module DatapathMultiCycle (
 
 
   reg [3:0] div_insns;
-  logic div_happening;
  // components of the instruction
  wire [6:0] insn_funct7;
  wire [4:0] insn_rs2;
@@ -197,13 +196,13 @@ module DatapathMultiCycle (
  end
  `endif
 
- // program counter
+ wire is_stall = div_insn && (div_insns != 4'd8);
  logic [`REG_SIZE] pcNext, pcCurrent;
  always @(posedge clk) begin
  if (rst) begin
  pcCurrent <= 32'd0;
  end else begin
- pcCurrent <= ((div_insn | div_happening) && div_insns != 4'd7) ? pcCurrent : pcNext;
+pcCurrent <= is_stall ? pcCurrent : pcNext;
  end
  end
  assign pc_to_imem = pcCurrent;
@@ -216,7 +215,7 @@ module DatapathMultiCycle (
  num_insns_current <= 0;
  end else begin
  cycles_current <= cycles_current + 1;
- if (!rst) begin
+ if (!rst && !is_stall) begin
  num_insns_current <= num_insns_current + 1;
  end
  end
@@ -284,7 +283,7 @@ module DatapathMultiCycle (
 
  trace_completed_pc = pcCurrent;
  trace_completed_insn = insn_from_imem;
- trace_completed_cycle_status = CYCLE_NO_STALL;
+trace_completed_cycle_status = is_stall ? CYCLE_DIV : CYCLE_NO_STALL;
  case (insn_opcode)
  OpLui: begin
  // TODO: start here by implementing lui
@@ -384,7 +383,7 @@ module DatapathMultiCycle (
   end
   else if (insn_div) begin
 
-    we = (div_insns == 4'd7);
+    we = (div_insns == 4'd8);
     if (rs2_data[31]) begin
       div_b_input = ~(rs2_data) + 1;
     end
@@ -400,7 +399,7 @@ module DatapathMultiCycle (
     output_d = 32'hFFFFFFFF;
   end
   else if (insn_divu) begin
-    we = (div_insns == 4'd7);
+    we = (div_insns == 4'd8);
     div_b_input = rs2_data;
     div_a_input = rs1_data;
 
@@ -411,7 +410,7 @@ module DatapathMultiCycle (
   end
 
   else if (insn_rem) begin
-    we = (div_insns == 4'd7);
+    we = (div_insns == 4'd8);
 
 
     if (rs2_data[31]) begin
@@ -431,10 +430,14 @@ module DatapathMultiCycle (
   end
 
   else if (insn_remu) begin
-    we = (div_insns == 4'd7);
+    we = (div_insns == 4'd8);
     div_b_input = rs2_data;
     div_a_input = rs1_data;
     output_d = div_rem;
+    
+    if (rs2_data == 32'b0) begin
+    output_d = rs1_data;
+    end
   end
 
   else illegal_insn = 1'b1;
@@ -605,28 +608,21 @@ end
 
  end
 
-  always_ff @(posedge clk) begin
-  if (rst) begin
-    div_happening <= 0;
-    div_insns <= 0;
-  end
-  else if (div_insn && !div_happening) begin
-      div_happening <= 1;
-      div_insns <= 4'd1;
+always_ff @(posedge clk) begin
+    if (rst) begin
+        div_insns <= 0;
+    end 
+    else if (div_insn) begin
+        if (div_insns == 4'd8) begin
+            div_insns <= 0;
+        end 
+        else begin
+            div_insns <= div_insns + 1;
+        end
+    end 
+    else begin
+        div_insns <= 0;
     end
-  
-  else if (div_happening && div_insns == 4'd7) begin
-    div_insns <= 0;
-    div_happening <= 0;
-  end
-  else if (div_happening) begin
-    div_insns <= div_insns + 1;
-  end
-  else begin
-    div_insns <= '0;
-    div_happening <= 0;
-  end
-
  end
 
 endmodule
