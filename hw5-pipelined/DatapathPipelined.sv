@@ -188,7 +188,7 @@ module DatapathPipelined (
       f_cycle_status <= CYCLE_NO_STALL;
     end 
     else if (load_stall) begin
-      f_pc_current = f_pc_current; //hold and repeat
+      f_pc_current <= f_pc_current; //hold and repeat
     end
     else begin
       f_cycle_status <= CYCLE_NO_STALL;
@@ -240,11 +240,11 @@ module DatapathPipelined (
 
   // 1-cycle load use stall
 
-  wire is_load = execute_state.insn[6:0] == OpLoad;
+  wire d_is_load = execute_state.insn[6:0] == OpLoad;
   
-  wire load_stall = is_load &&  (
+  wire load_stall = d_is_load &&  (
     (e_insn[11:7] == d_rs1 && d_rs1 != 0) || 
-    (e_insn[11:7] == d_rs2 && d_rs2 != 0));
+    ((e_insn[11:7] == d_rs2 && d_rs2 != 0) && (decode_state.insn[6:0] != OpStore)));
   
 
   // multi-cycle (possible) div stall
@@ -765,7 +765,7 @@ branch_pc = '0;
  OpJalr: begin
   we = 1'b1; 
   output_d = execute_state.pc + 4;
-  branch_pc = (rs1_data + e_imm_i_sext) & 32'b1;
+  branch_pc = (rs1_data + e_imm_i_sext) & ~32'b1;
   branch_taken = 1;
   
  end
@@ -773,7 +773,7 @@ branch_pc = '0;
  OpJal: begin
   we = 1'b1;
   output_d = execute_state.pc + 4;
-  branch_pc = execute_state.pc + e_imm_i_sext;
+  branch_pc = execute_state.pc + e_imm_j_sext;
   branch_taken = 1;
  end
 
@@ -789,7 +789,7 @@ branch_pc = '0;
 
  OpStore: begin
   we = 1'b0;
-  output_d = rs1_data + e_imm_i_sext; //compute the address and pass it
+  output_d = rs1_data + e_imm_s_sext; //compute the address and pass it
  end
 
  default: begin
@@ -981,7 +981,7 @@ else if (d_insn_sb) begin
         cycle_status: execute_state.cycle_status,
         reg_we: we,
         wb_reg_addr: e_rd,
-        reg_b : execute_state.reg_b,
+        reg_b : rs2_data,
         alu_output : output_d,
         rega_add : execute_state.rega_add,
         regb_add : execute_state.regb_add
@@ -1046,11 +1046,10 @@ else if (d_insn_sb) begin
       .disasm(wb_disasm)
   );
 
-logic [`REG_SIZE] w_data;
+wire [`REG_SIZE] w_data = (wb_state.insn[6:0] == OpLoad) ? wb_state.mem_output : wb_state.alu_output;
 logic [4:0] w_rd;
 
 always_comb begin
-  w_data = wb_state.alu_output;
   w_rd = wb_state.wb_reg_addr;
 
   if (wb_insn_ecall && wb_state.cycle_status == CYCLE_NO_STALL) begin
