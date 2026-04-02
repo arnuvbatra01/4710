@@ -186,7 +186,11 @@ module DatapathPipelined (
       f_pc_current <= 32'd0;
       // NB: use CYCLE_NO_STALL since this is the value that will persist after the last reset cycle
       f_cycle_status <= CYCLE_NO_STALL;
-    end else begin
+    end 
+    else if (load_stall) begin
+      f_pc_current = f_pc_current; //hold and repeat
+    end
+    else begin
       f_cycle_status <= CYCLE_NO_STALL;
       f_pc_current <= (branch_taken) ? branch_pc: f_pc_current + 4;
     end
@@ -212,9 +216,50 @@ module DatapathPipelined (
   logic [`REG_SIZE] d_pc_current;
   wire [`REG_SIZE] d_insn;
   cycle_status_e d_cycle_status;
+  logic is_stall;
+  logic [3:0] div_insns;
 
   assign d_pc_current = decode_state.pc;
   assign d_insn = decode_state.insn;
+
+  wire [6:0] d_insn_opcode = decode_state.insn[6:0];
+
+  wire d_insn_div = d_insn_opcode == OpRegReg && d_insn[31:25] == 7'd1 && d_insn[14:12] == 3'b100;
+  wire d_insn_divu = d_insn_opcode == OpRegReg && d_insn[31:25] == 7'd1 && d_insn[14:12] == 3'b101;
+  wire d_insn_rem = d_insn_opcode == OpRegReg && d_insn[31:25] == 7'd1 && d_insn[14:12] == 3'b110;
+  wire d_insn_remu = d_insn_opcode == OpRegReg && d_insn[31:25] == 7'd1 && d_insn[14:12] == 3'b111;
+
+  wire [4:0] d_rs1 = decode_state.insn[19:15]; // which registers we are reading from
+  wire [4:0] d_rs2 = decode_state.insn[24:20];
+
+  wire d_div_insn = insn_div | insn_divu | insn_rem | insn_remu;
+
+  
+
+  //// STALLING ////
+
+  // 1-cycle load use stall
+
+  wire is_load = execute_state.insn[6:0] == OpLoad;
+  
+  wire load_stall = is_load &&  (
+    (e_insn[11:7] == d_rs1 && d_rs1 != 0) || 
+    (e_insn[11:7] == d_rs2 && d_rs2 != 0));
+  
+
+  // multi-cycle (possible) div stall
+
+  /*
+  always_comb begin
+    if (d_div_insn == 1'b1 && prev_div)
+    begin
+        // stall
+        is_stall = 1'b1;
+    end
+  end
+  */
+
+  
 
   // this shows how to package up state in a `struct packed`, and how to pass it between stages
   stage_decode_t decode_state;
@@ -234,18 +279,19 @@ module DatapathPipelined (
         cycle_status: CYCLE_TAKEN_BRANCH
       };
     end 
-    
+    else if (load_stall) begin
+      decode_state <= decode_state;
+    end
     else begin
-      begin
         decode_state <= '{
           pc: f_pc_current,
           insn: f_insn,
           cycle_status: f_cycle_status
         };
-      end
       
     end
   end
+
   wire [255:0] d_disasm;
   Disasm #(
       .PREFIX("D")
@@ -255,9 +301,6 @@ module DatapathPipelined (
   );
 
 //write the comb logic for Decode stage
-
-wire [4:0] d_rs1    = decode_state.insn[19:15];
-wire [4:0] d_rs2    = decode_state.insn[24:20];
 
 
 
@@ -307,6 +350,17 @@ wire [`REG_SIZE] d_reg1, d_reg2;
         regb_add: 0
       };
       
+    end
+    else if (load_stall) begin
+      execute_state <= '{
+        pc: 0,
+        insn: 0,
+        cycle_status: CYCLE_LOAD2USE,
+        reg_a: 0,
+        reg_b: 0,
+        rega_add: 0,
+        regb_add: 0
+      }; 
     end
     else begin
         execute_state <= '{
@@ -439,6 +493,9 @@ wire [`REG_SIZE] e_imm_j_sext = {{11{e_imm_j[20]}}, e_imm_j[20:0]};
  wire insn_remu = insn_opcode == OpRegReg && e_insn[31:25] == 7'd1 && e_insn[14:12] == 3'b111;
 
  wire div_insn = insn_div | insn_divu | insn_rem | insn_remu;
+ 
+ wire [4:0] e_rs1    = execute_state.insn[19:15];
+ wire [4:0] e_rs2    = execute_state.insn[24:20];
 
  wire insn_ecall = insn_opcode == OpEnviron && e_insn[31:7] == 25'd0;
  wire insn_fence = insn_opcode == OpMiscMem;
@@ -507,8 +564,6 @@ execute_state.pc <= is_stall ? execute_state.pc : pcNext;
  logic illegal_insn;
  logic we;
  logic [4:0] dest;
- logic [7:0] selected_byte;
- logic [1:0] load_byte_offset;
  logic [31:0] load_addr;
  logic [63:0] large_mul;
  logic branch_taken;
@@ -555,9 +610,7 @@ end
  //pcNext = execute_state.pc + 4;
  cla_b = '0;
  cla_cin = '0;
- selected_byte = 8'b0;
  load_addr = '0;
- load_byte_offset = '0;
  large_mul = '0;
  div_b_input = '0;
  div_a_input = '0;
@@ -661,7 +714,15 @@ end
     large_mul = {1'b0, rs1_data} * {1'b0, rs2_data};
     output_d = large_mul[63:32];
   end
+
+  else if (insn_div) begin
+
+
+
+  end
   else illegal_insn = 1'b1;
+
+  // TO DO: Pipelined Division
 
  end
  else begin
@@ -699,6 +760,36 @@ branch_pc = '0;
    branch_taken = 1;
   end
 
+ end
+
+ OpJalr: begin
+  we = 1'b1; 
+  output_d = execute_state.pc + 4;
+  branch_pc = (rs1_data + e_imm_i_sext) & 32'b1;
+  branch_taken = 1;
+  
+ end
+
+ OpJal: begin
+  we = 1'b1;
+  output_d = execute_state.pc + 4;
+  branch_pc = execute_state.pc + e_imm_i_sext;
+  branch_taken = 1;
+ end
+
+ OpAuipc: begin
+  we = 1'b1;
+  output_d = execute_state.pc + e_imm_u;
+ end
+
+ OpLoad: begin
+  we = 1'b1;
+  output_d = rs1_data + e_imm_i_sext; //compute the address and pass it
+ end
+
+ OpStore: begin
+  we = 1'b0;
+  output_d = rs1_data + e_imm_i_sext; //compute the address and pass it
  end
 
  default: begin
@@ -743,7 +834,122 @@ branch_pc = '0;
 
 
   logic [`REG_SIZE] m_pc_current;
-  wire [`REG_SIZE] m_insn;
+  wire [`REG_SIZE] m_insn = memory_state.insn;
+  logic m_we = memory_state.reg_we;
+  logic [`REG_SIZE] m_output;
+  logic m_re;
+  wire [6:0] m_insn_opcode = m_insn[6:0];
+
+   wire d_insn_lb = m_insn_opcode == OpLoad && m_insn[14:12] == 3'b000;
+   wire d_insn_lh = m_insn_opcode == OpLoad && m_insn[14:12] == 3'b001;
+   wire d_insn_lw = m_insn_opcode == OpLoad && m_insn[14:12] == 3'b010;
+   wire d_insn_lbu = m_insn_opcode == OpLoad && m_insn[14:12] == 3'b100;
+   wire d_insn_lhu = m_insn_opcode == OpLoad && m_insn[14:12] == 3'b101;
+
+   wire d_insn_sb = m_insn_opcode == OpStore && m_insn[14:12] == 3'b000;
+   wire d_insn_sh = m_insn_opcode == OpStore && m_insn[14:12] == 3'b001;
+   wire d_insn_sw = m_insn_opcode == OpStore && m_insn[14:12] == 3'b010;
+
+
+   
+   logic [1:0] load_byte_offset = memory_state.alu_output[1:0];
+   logic [7:0] selected_byte;
+   logic [31:0] m_data;
+   assign addr_to_dmem = memory_state.alu_output & 32'hFFFC;
+
+
+  // TO DO: Store to/load from memory
+
+
+  always_comb begin
+
+  case (load_byte_offset)
+        2'b00: selected_byte = load_data_from_dmem[7:0];
+        2'b01: selected_byte = load_data_from_dmem[15:8];
+        2'b10: selected_byte = load_data_from_dmem[23:16];
+        2'b11: selected_byte = load_data_from_dmem[31:24];
+        default: selected_byte = 8'b0;
+  endcase
+
+  store_data_to_dmem = '0;
+  store_we_to_dmem = '0;
+  m_data = '0;
+
+ if (d_insn_lb) begin
+  m_data = {{24{selected_byte[7]}}, selected_byte};
+ end
+ else if (d_insn_lh) begin
+  // case here for 2-byte selection
+
+  if (load_byte_offset == 2'b00) begin
+    m_data = {{16{load_data_from_dmem[15]}}, load_data_from_dmem[15:0]};
+  end
+  else if (load_byte_offset == 2'b10) begin
+    m_data = {{16{load_data_from_dmem[31]}}, load_data_from_dmem[31:16]};
+  end
+ end
+
+else if (d_insn_lw) begin
+  m_data = load_data_from_dmem;
+end
+
+else if (d_insn_lbu) begin
+  m_data = {24'b0, selected_byte};
+end
+else if (d_insn_lhu) begin
+
+    if (load_byte_offset == 2'b00) begin
+    m_data = {16'b0, load_data_from_dmem[15:0]};
+  end
+  else if (load_byte_offset == 2'b10) begin
+    m_data = {16'b0, load_data_from_dmem[31:16]};
+  end
+
+end
+
+// Store Logic 
+
+else if (d_insn_sb) begin
+
+    if (memory_state.alu_output[1:0] == 2'b00) begin
+      store_we_to_dmem = 4'b1;
+      store_data_to_dmem = {24'b0, memory_state.reg_b[7:0]};
+    end
+    else if (memory_state.alu_output[1:0] == 2'b01) begin
+      store_we_to_dmem = 4'b10;
+      store_data_to_dmem = {{16'b0, memory_state.reg_b[7:0]} , 8'b0};
+    end
+    else if (memory_state.alu_output[1:0] == 2'b10) begin
+      store_we_to_dmem = 4'b100;
+      store_data_to_dmem = {{8'b0, memory_state.reg_b[7:0]} , 16'b0};
+    end
+    else if (memory_state.alu_output[1:0] == 2'b11) begin
+      store_we_to_dmem = 4'b1000;
+      store_data_to_dmem = {memory_state.reg_b[7:0], 24'b0};
+    end
+    else begin end
+
+  end
+
+  else if (d_insn_sh) begin
+
+    if (load_byte_offset == 2'b00) begin
+      store_we_to_dmem = 4'b0011;
+      store_data_to_dmem = {16'b0, memory_state.reg_b[15:0]};
+    end
+    else if (load_byte_offset == 2'b10) begin
+      store_we_to_dmem = 4'b1100;
+      store_data_to_dmem = {memory_state.reg_b[15:0] , 16'b0};
+    end
+
+  end
+
+  else if (d_insn_sw) begin
+    store_we_to_dmem = 4'b1111;
+    store_data_to_dmem = memory_state.reg_b;
+  end
+ end
+
 
   // this shows how to package up state in a `struct packed`, and how to pass it between stages
   stage_mem_t memory_state;
@@ -754,8 +960,21 @@ branch_pc = '0;
           cycle_status : CYCLE_RESET
 
       };
-    end else begin
-      begin
+    end 
+    else if (wb_state.insn[6:0] == OpLoad && memory_state.insn[6:0] == OpStore && wb_state.wb_reg_addr == memory_state.regb_add) begin
+      memory_state <= '{
+        pc: execute_state.pc,
+        insn: execute_state.insn,
+        cycle_status: execute_state.cycle_status,
+        reg_we: we,
+        wb_reg_addr: e_rd,
+        reg_b : wb_state.mem_output,
+        alu_output : output_d,
+        rega_add : execute_state.rega_add,
+        regb_add : execute_state.regb_add
+      };
+    end
+    else begin
         memory_state <= '{
          pc: execute_state.pc,
         insn: execute_state.insn,
@@ -767,7 +986,6 @@ branch_pc = '0;
         rega_add : execute_state.rega_add,
         regb_add : execute_state.regb_add
         };
-      end
     end
   end
   wire [255:0] m_disasm;
@@ -779,14 +997,8 @@ branch_pc = '0;
   );
 
 
-  logic [`REG_SIZE] m_data;
 
-  always_comb begin
-    addr_to_dmem = '0;
-    store_data_to_dmem = '0;
-    store_we_to_dmem = 4'b0;
-    m_data = '0;
-  end
+  
 
   /* 
 
@@ -820,6 +1032,7 @@ branch_pc = '0;
         wb_reg_addr: memory_state.wb_reg_addr,
         alu_output:  memory_state.alu_output,
         mem_output: m_data
+        
         
         };
       end
