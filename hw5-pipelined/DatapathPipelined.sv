@@ -860,6 +860,10 @@ branch_pc = '0;
 
   // TO DO: Store to/load from memory
 
+   wire wm_bypass_active = (wb_state.insn[6:0] == OpLoad)
+    && (wb_state.wb_reg_addr == memory_state.regb_add)
+    && (memory_state.regb_add != 0);
+   wire [31:0] m_store_data = wm_bypass_active ? w_data : memory_state.reg_b;
 
   always_comb begin
 
@@ -909,23 +913,25 @@ end
 
 // Store Logic 
 
+
+
 else if (d_insn_sb) begin
 
     if (memory_state.alu_output[1:0] == 2'b00) begin
       store_we_to_dmem = 4'b1;
-      store_data_to_dmem = {24'b0, memory_state.reg_b[7:0]};
+      store_data_to_dmem = {24'b0, m_store_data[7:0]};
     end
     else if (memory_state.alu_output[1:0] == 2'b01) begin
       store_we_to_dmem = 4'b10;
-      store_data_to_dmem = {{16'b0, memory_state.reg_b[7:0]} , 8'b0};
+      store_data_to_dmem = {{16'b0, m_store_data[7:0]} , 8'b0};
     end
     else if (memory_state.alu_output[1:0] == 2'b10) begin
       store_we_to_dmem = 4'b100;
-      store_data_to_dmem = {{8'b0, memory_state.reg_b[7:0]} , 16'b0};
+      store_data_to_dmem = {{8'b0, m_store_data[7:0]} , 16'b0};
     end
     else if (memory_state.alu_output[1:0] == 2'b11) begin
       store_we_to_dmem = 4'b1000;
-      store_data_to_dmem = {memory_state.reg_b[7:0], 24'b0};
+      store_data_to_dmem = {m_store_data[7:0], 24'b0};
     end
     else begin end
 
@@ -935,20 +941,22 @@ else if (d_insn_sb) begin
 
     if (load_byte_offset == 2'b00) begin
       store_we_to_dmem = 4'b0011;
-      store_data_to_dmem = {16'b0, memory_state.reg_b[15:0]};
+      store_data_to_dmem = {16'b0, m_store_data[15:0]};
     end
     else if (load_byte_offset == 2'b10) begin
       store_we_to_dmem = 4'b1100;
-      store_data_to_dmem = {memory_state.reg_b[15:0] , 16'b0};
+      store_data_to_dmem = {m_store_data[15:0] , 16'b0};
     end
 
   end
 
   else if (d_insn_sw) begin
     store_we_to_dmem = 4'b1111;
-    store_data_to_dmem = memory_state.reg_b;
+    store_data_to_dmem = m_store_data;
   end
  end
+
+
 
 
   // this shows how to package up state in a `struct packed`, and how to pass it between stages
