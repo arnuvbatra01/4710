@@ -187,12 +187,16 @@ module DatapathPipelined (
       // NB: use CYCLE_NO_STALL since this is the value that will persist after the last reset cycle
       f_cycle_status <= CYCLE_NO_STALL;
     end 
-    else if (load_stall) begin
+    else if (branch_taken && !e_non_div_stall) begin // JUMP beats STALL
+      f_cycle_status <= CYCLE_NO_STALL;
+      f_pc_current <= branch_pc;
+    end
+    else if (overall_stall) begin
       f_pc_current <= f_pc_current; //hold and repeat
     end
     else begin
       f_cycle_status <= CYCLE_NO_STALL;
-      f_pc_current <= (branch_taken) ? branch_pc: f_pc_current + 4;
+      f_pc_current <= f_pc_current + 4;
     end
   end
   // send PC to imem
@@ -241,23 +245,51 @@ module DatapathPipelined (
   // 1-cycle load use stall
 
   wire d_is_load = execute_state.insn[6:0] == OpLoad;
-  
-  wire load_stall = d_is_load &&  (
-    (e_insn[11:7] == d_rs1 && d_rs1 != 0) || 
-    ((e_insn[11:7] == d_rs2 && d_rs2 != 0) && (decode_state.insn[6:0] != OpStore)));
-  
 
-  // multi-cycle (possible) div stall
+  // Does the instruction in decode use rs1?
+  wire d_reads_rs1 = (d_insn_opcode == OpLoad) || (d_insn_opcode == OpStore) || 
+                     (d_insn_opcode == OpBranch) || (d_insn_opcode == OpJalr) || 
+                     (d_insn_opcode == OpRegImm) || (d_insn_opcode == OpRegReg);
+                     
+  // Does the instruction in decode use rs2?
+  wire d_reads_rs2 = (d_insn_opcode == OpStore) || (d_insn_opcode == OpBranch) || 
+                     (d_insn_opcode == OpRegReg);
+  
+wire load_stall = d_is_load && e_rd != 0 && (
+    (d_reads_rs1 && e_rd == d_rs1) || 
+    (d_reads_rs2 && e_rd == d_rs2 && d_insn_opcode != OpStore) 
+  );
 
-  /*
+  // Divider Tracking Pipeline
+  typedef struct packed {
+    logic [`REG_SIZE] pc;
+    logic [`INSN_SIZE] insn;
+    logic is_neg_q;
+    logic is_neg_rem;
+    logic div_by_zero;
+    logic [`REG_SIZE] dividend;
+  } div_track_t;
+
+  div_track_t div_pipe [6:0];
+  logic [6:0] div_valid;
+
+  // Is there a valid divide currently in Execute?
+  wire e_is_div = (execute_state.insn[6:0] == 7'b01_100_11) && (execute_state.insn[31:25] == 7'd1) && (execute_state.insn[14] == 1'b1) && (execute_state.cycle_status != CYCLE_DIV) && (execute_state.cycle_status != CYCLE_RESET);
+  wire [4:0] e_rd = execute_state.insn[11:7];
+
+  // Stall logic combinations
+  logic div_dep_stall;
   always_comb begin
-    if (d_div_insn == 1'b1 && prev_div)
-    begin
-        // stall
-        is_stall = 1'b1;
+    div_dep_stall = 1'b0;
+    if (e_is_div && e_rd != 0 && (d_rs1 == e_rd || d_rs2 == e_rd)) div_dep_stall = 1'b1;
+    for (int i=0; i<6; i++) begin
+      if (div_valid[i] && div_pipe[i].insn[11:7] != 0 && (d_rs1 == div_pipe[i].insn[11:7] || d_rs2 == div_pipe[i].insn[11:7])) div_dep_stall = 1'b1;
     end
   end
-  */
+
+  wire e_is_valid = (execute_state.insn != 0 && execute_state.cycle_status != CYCLE_RESET && execute_state.cycle_status != CYCLE_DIV);
+  wire e_non_div_stall = e_is_valid && !e_is_div && (|div_valid);
+  wire overall_stall = load_stall || div_dep_stall || e_non_div_stall;
 
   
 
@@ -272,14 +304,15 @@ module DatapathPipelined (
         cycle_status: CYCLE_RESET
       };
     end
-    else if (branch_taken) begin
+    else if (branch_taken && !e_non_div_stall) begin // FLUSH beats STALL
       decode_state <= '{
         pc: 0,
         insn: 0,
         cycle_status: CYCLE_TAKEN_BRANCH
       };
-    end 
-    else if (load_stall) begin
+    end
+
+    else if (overall_stall) begin
       decode_state <= decode_state;
     end
     else begin
@@ -323,7 +356,7 @@ wire [`REG_SIZE] d_reg1, d_reg2;
 //get immediates and sign extend
 
   /****************/
-  /*   EXECUTE STAGE   */
+  /* EXECUTE STAGE   */
   /****************/
 
     stage_execute_t execute_state;
@@ -339,6 +372,15 @@ wire [`REG_SIZE] d_reg1, d_reg2;
         regb_add: 0
       };
     end
+    else if (e_non_div_stall) begin
+      execute_state <= execute_state; // HOLD: non-divide is waiting for older divide to finish
+    end
+    else if (load_stall) begin
+      execute_state <= '{
+        pc: 0, insn: 0, cycle_status: CYCLE_LOAD2USE, // FLUSH: load-use data hazard
+        reg_a: 0, reg_b: 0, rega_add: 0, regb_add: 0
+      }; 
+    end
     else if (branch_taken) begin
       execute_state <= '{
         pc: 0,
@@ -349,19 +391,14 @@ wire [`REG_SIZE] d_reg1, d_reg2;
         rega_add: 0,
         regb_add: 0
       };
-      
     end
-    else if (load_stall) begin
+    else if (div_dep_stall) begin
       execute_state <= '{
-        pc: 0,
-        insn: 0,
-        cycle_status: CYCLE_LOAD2USE,
-        reg_a: 0,
-        reg_b: 0,
-        rega_add: 0,
-        regb_add: 0
+        pc: 0, insn: 0, cycle_status: CYCLE_DIV, // FLUSH: decode is stalled waiting for division
+        reg_a: 0, reg_b: 0, rega_add: 0, regb_add: 0
       }; 
     end
+
     else begin
         execute_state <= '{
           pc: decode_state.pc,
@@ -391,7 +428,6 @@ wire [`REG_SIZE] d_reg1, d_reg2;
   
 
 wire [6:0] insn_opcode = execute_state.insn[6:0];
-wire [4:0] e_rd = execute_state.insn[11:7];
 wire [2:0] e_funct3 = execute_state.insn[14:12];
 wire [6:0] e_funct7 = execute_state.insn[31:25];
 
@@ -501,10 +537,7 @@ wire [`REG_SIZE] e_imm_j_sext = {{11{e_imm_j[20]}}, e_imm_j[20:0]};
  wire insn_fence = insn_opcode == OpMiscMem;
 
 
-/* 
-
-
-ALU
+/* ALU
 
 
 */
@@ -574,12 +607,19 @@ always_comb begin
   //::::::: MX FORWARDING:::::
 
   
+  logic e_reads_rs1;
+  logic e_reads_rs2;
+  e_reads_rs1 = (insn_opcode == OpLoad) || (insn_opcode == OpStore) || 
+                  (insn_opcode == OpBranch) || (insn_opcode == OpJalr) || 
+                  (insn_opcode == OpRegImm) || (insn_opcode == OpRegReg);
+  e_reads_rs2 = (insn_opcode == OpStore) || (insn_opcode == OpBranch) || 
+                  (insn_opcode == OpRegReg);
 
-    if (memory_state.reg_we && execute_state.rega_add != 0 && execute_state.rega_add == memory_state.wb_reg_addr) begin
+    if (e_reads_rs1 && memory_state.reg_we && execute_state.rega_add != 0 && execute_state.rega_add == memory_state.wb_reg_addr) begin
     // forward from memory, don't check WB  
       rs1_data = memory_state.alu_output;
     end
-    else if (wb_state.reg_we && execute_state.rega_add != 0 && execute_state.rega_add == wb_state.wb_reg_addr) begin
+    else if (e_reads_rs1 && wb_state.reg_we && execute_state.rega_add != 0 && execute_state.rega_add == wb_state.wb_reg_addr) begin
     // forward from WB 
       rs1_data = w_data;
     end
@@ -588,11 +628,11 @@ always_comb begin
     end
   
     //assign rs2 data
-    if (memory_state.reg_we && execute_state.regb_add != 0 && execute_state.regb_add == memory_state.wb_reg_addr) begin
+    if (e_reads_rs2 && memory_state.reg_we && execute_state.regb_add != 0 && execute_state.regb_add == memory_state.wb_reg_addr) begin
     // forward from memory, don't check WB  
       rs2_data = memory_state.alu_output;
     end
-    else if (wb_state.reg_we && execute_state.regb_add != 0 && execute_state.regb_add == wb_state.wb_reg_addr) begin
+    else if (e_reads_rs2 && wb_state.reg_we && execute_state.regb_add != 0 && execute_state.regb_add == wb_state.wb_reg_addr) begin
     // forward from WB 
       rs2_data = w_data;
     end
@@ -715,10 +755,10 @@ end
     output_d = large_mul[63:32];
   end
 
-  else if (insn_div) begin
-
-
-
+else if (insn_div || insn_divu || insn_rem || insn_remu) begin
+    we = 1'b0; 
+    if (rs2_data[31] && (insn_div || insn_rem)) div_b_input = ~(rs2_data) + 1; else div_b_input = rs2_data;
+    if (rs1_data[31] && (insn_div || insn_rem)) div_a_input = ~(rs1_data) + 1; else div_a_input = rs1_data;
   end
   else illegal_insn = 1'b1;
 
@@ -826,9 +866,31 @@ branch_pc = '0;
   end
 `endif
   
-  /* 
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      div_valid <= 7'b0;
+    end else begin
+      for (int i=0; i<6; i++) begin
+        div_valid[i+1] <= div_valid[i];
+        div_pipe[i+1]  <= div_pipe[i];
+      end
+      
+      if (e_is_div) begin
+        div_valid[0] <= 1'b1;
+        div_pipe[0] <= '{
+          pc: execute_state.pc, insn: execute_state.insn,
+          is_neg_q: (rs1_data[31] != rs2_data[31]) && (execute_state.insn[14:12] == 3'b100),
+          is_neg_rem: rs1_data[31] && (execute_state.insn[14:12] == 3'b110),
+          div_by_zero: (rs2_data == 0),
+          dividend: rs1_data
+        };
+      end else begin
+        div_valid[0] <= 1'b0;
+      end
+    end
+  end
 
-    MEMORY
+  /* MEMORY
 
   */
 
@@ -957,18 +1019,31 @@ else if (d_insn_sb) begin
  end
 
 
+logic [31:0] final_div_result;
+  always_comb begin
+    final_div_result = 0;
+    if (div_pipe[6].insn[14:12] == 3'b100) final_div_result = div_pipe[6].div_by_zero ? 32'hFFFFFFFF : (div_pipe[6].is_neg_q ? (~div_q + 1) : div_q);
+    else if (div_pipe[6].insn[14:12] == 3'b101) final_div_result = div_pipe[6].div_by_zero ? 32'hFFFFFFFF : div_q;
+    else if (div_pipe[6].insn[14:12] == 3'b110) final_div_result = div_pipe[6].div_by_zero ? div_pipe[6].dividend : (div_pipe[6].is_neg_rem ? (~div_rem + 1) : div_rem);
+    else if (div_pipe[6].insn[14:12] == 3'b111) final_div_result = div_pipe[6].div_by_zero ? div_pipe[6].dividend : div_rem;
+  end
 
 
   // this shows how to package up state in a `struct packed`, and how to pass it between stages
   stage_mem_t memory_state;
-  always_ff @(posedge clk) begin
+always_ff @(posedge clk) begin
     if (rst) begin
-      memory_state <= '{
-          default: 0,
-          cycle_status : CYCLE_RESET
-
-      };
+      memory_state <= '{default: 0, cycle_status : CYCLE_RESET};
     end 
+    else if (div_valid[6]) begin // Catch the 8-cycle delayed division
+      memory_state <= '{
+        pc: div_pipe[6].pc, insn: div_pipe[6].insn, cycle_status: CYCLE_NO_STALL,
+        reg_we: 1'b1, wb_reg_addr: div_pipe[6].insn[11:7], reg_b: 0, alu_output: final_div_result, rega_add: 0, regb_add: 0
+      };
+    end
+    else if (e_non_div_stall || e_is_div) begin // Insert bubbles for stalls/consumed divides
+      memory_state <= '{default: 0, cycle_status: CYCLE_DIV};
+    end
     else if (wb_state.insn[6:0] == OpLoad && memory_state.insn[6:0] == OpStore && wb_state.wb_reg_addr == memory_state.regb_add) begin
       memory_state <= '{
         pc: execute_state.pc,
@@ -1008,9 +1083,7 @@ else if (d_insn_sb) begin
 
   
 
-  /* 
-
-    WRITE BACK
+  /* WRITE BACK
 
   */
 
