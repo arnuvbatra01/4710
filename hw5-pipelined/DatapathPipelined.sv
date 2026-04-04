@@ -282,7 +282,7 @@ wire load_stall = d_is_load && e_rd != 0 && (
   always_comb begin
     div_dep_stall = 1'b0;
     if (e_is_div && e_rd != 0 && (d_rs1 == e_rd || d_rs2 == e_rd)) div_dep_stall = 1'b1;
-    for (int i=0; i<6; i++) begin
+    for (int i=0; i < 6; i++) begin
       if (div_valid[i] && div_pipe[i].insn[11:7] != 0 && (d_rs1 == div_pipe[i].insn[11:7] || d_rs2 == div_pipe[i].insn[11:7])) div_dep_stall = 1'b1;
     end
   end
@@ -914,7 +914,7 @@ branch_pc = '0;
 
 
    
-   logic [1:0] load_byte_offset = memory_state.alu_output[1:0];
+   wire [1:0] load_byte_offset = memory_state.alu_output[1:0];
    logic [7:0] selected_byte;
    logic [31:0] m_data;
    assign addr_to_dmem = memory_state.alu_output & 32'hFFFC;
@@ -1044,19 +1044,7 @@ always_ff @(posedge clk) begin
     else if (e_non_div_stall || e_is_div) begin // Insert bubbles for stalls/consumed divides
       memory_state <= '{default: 0, cycle_status: CYCLE_DIV};
     end
-    else if (wb_state.insn[6:0] == OpLoad && memory_state.insn[6:0] == OpStore && wb_state.wb_reg_addr == memory_state.regb_add) begin
-      memory_state <= '{
-        pc: execute_state.pc,
-        insn: execute_state.insn,
-        cycle_status: execute_state.cycle_status,
-        reg_we: we,
-        wb_reg_addr: e_rd,
-        reg_b : wb_state.mem_output,
-        alu_output : output_d,
-        rega_add : execute_state.rega_add,
-        regb_add : execute_state.regb_add
-      };
-    end
+
     else begin
         memory_state <= '{
          pc: execute_state.pc,

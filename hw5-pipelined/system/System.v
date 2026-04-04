@@ -666,7 +666,7 @@ module DatapathPipelined (
 	input wire rst;
 	output wire [31:0] pc_to_imem;
 	input wire [31:0] insn_from_imem;
-	output reg [31:0] addr_to_dmem;
+	output wire [31:0] addr_to_dmem;
 	input wire [31:0] load_data_from_dmem;
 	output reg [31:0] store_data_to_dmem;
 	output reg [3:0] store_we_to_dmem;
@@ -685,14 +685,42 @@ module DatapathPipelined (
 	reg [31:0] f_cycle_status;
 	reg [31:0] branch_pc;
 	reg branch_taken;
+	reg [6:0] div_valid;
+	reg [169:0] execute_state;
+	wire e_is_div = ((((execute_state[112:106] == 7'b0110011) && (execute_state[137:131] == 7'd1)) && (execute_state[120] == 1'b1)) && (execute_state[105-:32] != 32'd2)) && (execute_state[105-:32] != 32'd4);
+	wire e_is_valid = ((execute_state[137-:32] != 0) && (execute_state[105-:32] != 32'd4)) && (execute_state[105-:32] != 32'd2);
+	wire e_non_div_stall = (e_is_valid && !e_is_div) && |div_valid;
+	reg div_dep_stall;
+	localparam [6:0] OpStore = 7'b0100011;
+	reg [95:0] decode_state;
+	wire [6:0] d_insn_opcode = decode_state[38:32];
+	localparam [6:0] OpLoad = 7'b0000011;
+	wire d_is_load = execute_state[112:106] == OpLoad;
+	localparam [6:0] OpBranch = 7'b1100011;
+	localparam [6:0] OpJalr = 7'b1100111;
+	localparam [6:0] OpRegImm = 7'b0010011;
+	localparam [6:0] OpRegReg = 7'b0110011;
+	wire d_reads_rs1 = (((((d_insn_opcode == OpLoad) || (d_insn_opcode == OpStore)) || (d_insn_opcode == OpBranch)) || (d_insn_opcode == OpJalr)) || (d_insn_opcode == OpRegImm)) || (d_insn_opcode == OpRegReg);
+	wire d_reads_rs2 = ((d_insn_opcode == OpStore) || (d_insn_opcode == OpBranch)) || (d_insn_opcode == OpRegReg);
+	wire [4:0] d_rs1 = decode_state[51:47];
+	wire [4:0] d_rs2 = decode_state[56:52];
+	wire [4:0] e_rd = execute_state[117:113];
+	wire load_stall = (d_is_load && (e_rd != 0)) && ((d_reads_rs1 && (e_rd == d_rs1)) || ((d_reads_rs2 && (e_rd == d_rs2)) && (d_insn_opcode != OpStore)));
+	wire overall_stall = (load_stall || div_dep_stall) || e_non_div_stall;
 	always @(posedge clk)
 		if (rst) begin
 			f_pc_current <= 32'd0;
 			f_cycle_status <= 32'd1;
 		end
+		else if (branch_taken && !e_non_div_stall) begin
+			f_cycle_status <= 32'd1;
+			f_pc_current <= branch_pc;
+		end
+		else if (overall_stall)
+			f_pc_current <= f_pc_current;
 		else begin
 			f_cycle_status <= 32'd1;
-			f_pc_current <= (branch_taken ? branch_pc : f_pc_current + 4);
+			f_pc_current <= f_pc_current + 4;
 		end
 	assign pc_to_imem = f_pc_current;
 	assign f_insn = insn_from_imem;
@@ -704,14 +732,42 @@ module DatapathPipelined (
 	wire [31:0] d_pc_current;
 	wire [31:0] d_insn;
 	wire [31:0] d_cycle_status;
-	reg [95:0] decode_state;
+	wire is_stall;
+	wire [3:0] div_insns;
 	assign d_pc_current = decode_state[95-:32];
 	assign d_insn = decode_state[63-:32];
+	wire d_insn_div = ((d_insn_opcode == OpRegReg) && (d_insn[31:25] == 7'd1)) && (d_insn[14:12] == 3'b100);
+	wire d_insn_divu = ((d_insn_opcode == OpRegReg) && (d_insn[31:25] == 7'd1)) && (d_insn[14:12] == 3'b101);
+	wire d_insn_rem = ((d_insn_opcode == OpRegReg) && (d_insn[31:25] == 7'd1)) && (d_insn[14:12] == 3'b110);
+	wire d_insn_remu = ((d_insn_opcode == OpRegReg) && (d_insn[31:25] == 7'd1)) && (d_insn[14:12] == 3'b111);
+	wire [31:0] e_insn = execute_state[137-:32];
+	wire [6:0] insn_opcode = execute_state[112:106];
+	wire insn_div = ((insn_opcode == OpRegReg) && (e_insn[31:25] == 7'd1)) && (e_insn[14:12] == 3'b100);
+	wire insn_divu = ((insn_opcode == OpRegReg) && (e_insn[31:25] == 7'd1)) && (e_insn[14:12] == 3'b101);
+	wire insn_rem = ((insn_opcode == OpRegReg) && (e_insn[31:25] == 7'd1)) && (e_insn[14:12] == 3'b110);
+	wire insn_remu = ((insn_opcode == OpRegReg) && (e_insn[31:25] == 7'd1)) && (e_insn[14:12] == 3'b111);
+	wire d_div_insn = ((insn_div | insn_divu) | insn_rem) | insn_remu;
+	reg [98:0] div_pipe [6:0];
+	always @(*) begin
+		if (_sv2v_0)
+			;
+		div_dep_stall = 1'b0;
+		if ((e_is_div && (e_rd != 0)) && ((d_rs1 == e_rd) || (d_rs2 == e_rd)))
+			div_dep_stall = 1'b1;
+		begin : sv2v_autoblock_1
+			reg signed [31:0] i;
+			for (i = 0; i < 6; i = i + 1)
+				if ((div_valid[i] && (div_pipe[i][46:42] != 0)) && ((d_rs1 == div_pipe[i][46:42]) || (d_rs2 == div_pipe[i][46:42])))
+					div_dep_stall = 1'b1;
+		end
+	end
 	always @(posedge clk)
 		if (rst)
 			decode_state <= 96'h000000000000000000000004;
-		else if (branch_taken)
+		else if (branch_taken && !e_non_div_stall)
 			decode_state <= 96'h000000000000000000000008;
+		else if (overall_stall)
+			decode_state <= decode_state;
 		else
 			decode_state <= {f_pc_current, f_insn, f_cycle_status};
 	wire [255:0] d_disasm;
@@ -719,13 +775,11 @@ module DatapathPipelined (
 		.insn(decode_state[63-:32]),
 		.disasm(d_disasm)
 	);
-	wire [4:0] d_rs1 = decode_state[51:47];
-	wire [4:0] d_rs2 = decode_state[56:52];
 	wire [31:0] d_reg1;
 	wire [31:0] d_reg2;
-	reg [31:0] w_data;
-	reg [4:0] w_rd;
 	reg [165:0] wb_state;
+	wire [31:0] w_data = (wb_state[108:102] == OpLoad ? wb_state[69-:32] : wb_state[37-:32]);
+	reg [4:0] w_rd;
 	RegFile rf(
 		.clk(clk),
 		.rst(rst),
@@ -737,7 +791,6 @@ module DatapathPipelined (
 		.rd(w_rd),
 		.rd_data(w_data)
 	);
-	reg [169:0] execute_state;
 	function automatic [31:0] sv2v_cast_32;
 		input reg [31:0] inp;
 		sv2v_cast_32 = inp;
@@ -745,8 +798,14 @@ module DatapathPipelined (
 	always @(posedge clk)
 		if (rst)
 			execute_state <= 170'h0000000000000000000000010000000000000000000;
+		else if (e_non_div_stall)
+			execute_state <= execute_state;
+		else if (load_stall)
+			execute_state <= 170'h0000000000000000000000040000000000000000000;
 		else if (branch_taken)
 			execute_state <= 170'h0000000000000000000000020000000000000000000;
+		else if (div_dep_stall)
+			execute_state <= 170'h0000000000000000000000008000000000000000000;
 		else
 			execute_state <= {sv2v_cast_32(decode_state[95-:32]), d_insn, sv2v_cast_32(decode_state[31-:32]), d_reg1, d_reg2, d_rs1, d_rs2};
 	wire [255:0] e_disasm;
@@ -755,11 +814,8 @@ module DatapathPipelined (
 		.disasm(e_disasm)
 	);
 	wire [31:0] e_pc_current;
-	wire [31:0] e_insn = execute_state[137-:32];
 	wire e_wb;
 	reg [31:0] output_d;
-	wire [6:0] insn_opcode = execute_state[112:106];
-	wire [4:0] e_rd = execute_state[117:113];
 	wire [2:0] e_funct3 = execute_state[120:118];
 	wire [6:0] e_funct7 = execute_state[137:131];
 	wire [11:0] e_imm_i = execute_state[137:126];
@@ -778,14 +834,8 @@ module DatapathPipelined (
 	wire [31:0] e_imm_s_sext = {{20 {e_imm_s[11]}}, e_imm_s[11:0]};
 	wire [31:0] e_imm_b_sext = {{19 {e_imm_b[12]}}, e_imm_b[12:0]};
 	wire [31:0] e_imm_j_sext = {{11 {e_imm_j[20]}}, e_imm_j[20:0]};
-	localparam [6:0] OpLoad = 7'b0000011;
-	localparam [6:0] OpStore = 7'b0100011;
-	localparam [6:0] OpBranch = 7'b1100011;
-	localparam [6:0] OpJalr = 7'b1100111;
 	localparam [6:0] OpMiscMem = 7'b0001111;
 	localparam [6:0] OpJal = 7'b1101111;
-	localparam [6:0] OpRegImm = 7'b0010011;
-	localparam [6:0] OpRegReg = 7'b0110011;
 	localparam [6:0] OpEnviron = 7'b1110011;
 	localparam [6:0] OpAuipc = 7'b0010111;
 	localparam [6:0] OpLui = 7'b0110111;
@@ -830,11 +880,9 @@ module DatapathPipelined (
 	wire insn_mulh = ((insn_opcode == OpRegReg) && (e_insn[31:25] == 7'd1)) && (e_insn[14:12] == 3'b001);
 	wire insn_mulhsu = ((insn_opcode == OpRegReg) && (e_insn[31:25] == 7'd1)) && (e_insn[14:12] == 3'b010);
 	wire insn_mulhu = ((insn_opcode == OpRegReg) && (e_insn[31:25] == 7'd1)) && (e_insn[14:12] == 3'b011);
-	wire insn_div = ((insn_opcode == OpRegReg) && (e_insn[31:25] == 7'd1)) && (e_insn[14:12] == 3'b100);
-	wire insn_divu = ((insn_opcode == OpRegReg) && (e_insn[31:25] == 7'd1)) && (e_insn[14:12] == 3'b101);
-	wire insn_rem = ((insn_opcode == OpRegReg) && (e_insn[31:25] == 7'd1)) && (e_insn[14:12] == 3'b110);
-	wire insn_remu = ((insn_opcode == OpRegReg) && (e_insn[31:25] == 7'd1)) && (e_insn[14:12] == 3'b111);
 	wire div_insn = ((insn_div | insn_divu) | insn_rem) | insn_remu;
+	wire [4:0] e_rs1 = execute_state[125:121];
+	wire [4:0] e_rs2 = execute_state[130:126];
 	wire insn_ecall = (insn_opcode == OpEnviron) && (e_insn[31:7] == 25'd0);
 	wire insn_fence = insn_opcode == OpMiscMem;
 	reg [31:0] rs1_data;
@@ -864,23 +912,25 @@ module DatapathPipelined (
 	reg illegal_insn;
 	reg we;
 	wire [4:0] dest;
-	reg [7:0] selected_byte;
-	reg [1:0] load_byte_offset;
 	reg [31:0] load_addr;
 	reg [63:0] large_mul;
 	reg [175:0] memory_state;
-	always @(*) begin
+	always @(*) begin : sv2v_autoblock_2
+		reg e_reads_rs1;
+		reg e_reads_rs2;
 		if (_sv2v_0)
 			;
-		if ((memory_state[10] && (execute_state[9-:5] != 0)) && (execute_state[9-:5] == memory_state[15-:5]))
+		e_reads_rs1 = (((((insn_opcode == OpLoad) || (insn_opcode == OpStore)) || (insn_opcode == OpBranch)) || (insn_opcode == OpJalr)) || (insn_opcode == OpRegImm)) || (insn_opcode == OpRegReg);
+		e_reads_rs2 = ((insn_opcode == OpStore) || (insn_opcode == OpBranch)) || (insn_opcode == OpRegReg);
+		if (((e_reads_rs1 && memory_state[10]) && (execute_state[9-:5] != 0)) && (execute_state[9-:5] == memory_state[15-:5]))
 			rs1_data = memory_state[79-:32];
-		else if ((wb_state[0] && (execute_state[9-:5] != 0)) && (execute_state[9-:5] == wb_state[5-:5]))
+		else if (((e_reads_rs1 && wb_state[0]) && (execute_state[9-:5] != 0)) && (execute_state[9-:5] == wb_state[5-:5]))
 			rs1_data = w_data;
 		else
 			rs1_data = execute_state[73-:32];
-		if ((memory_state[10] && (execute_state[4-:5] != 0)) && (execute_state[4-:5] == memory_state[15-:5]))
+		if (((e_reads_rs2 && memory_state[10]) && (execute_state[4-:5] != 0)) && (execute_state[4-:5] == memory_state[15-:5]))
 			rs2_data = memory_state[79-:32];
-		else if ((wb_state[0] && (execute_state[4-:5] != 0)) && (execute_state[4-:5] == wb_state[5-:5]))
+		else if (((e_reads_rs2 && wb_state[0]) && (execute_state[4-:5] != 0)) && (execute_state[4-:5] == wb_state[5-:5]))
 			rs2_data = w_data;
 		else
 			rs2_data = execute_state[41-:32];
@@ -893,9 +943,7 @@ module DatapathPipelined (
 		output_d = 1'sb0;
 		cla_b = 1'sb0;
 		cla_cin = 1'sb0;
-		selected_byte = 8'b00000000;
 		load_addr = 1'sb0;
-		load_byte_offset = 1'sb0;
 		large_mul = 1'sb0;
 		div_b_input = 1'sb0;
 		div_a_input = 1'sb0;
@@ -977,6 +1025,17 @@ module DatapathPipelined (
 						large_mul = {1'b0, rs1_data} * {1'b0, rs2_data};
 						output_d = large_mul[63:32];
 					end
+					else if (((insn_div || insn_divu) || insn_rem) || insn_remu) begin
+						we = 1'b0;
+						if (rs2_data[31] && (insn_div || insn_rem))
+							div_b_input = ~rs2_data + 1;
+						else
+							div_b_input = rs2_data;
+						if (rs1_data[31] && (insn_div || insn_rem))
+							div_a_input = ~rs1_data + 1;
+						else
+							div_a_input = rs1_data;
+					end
 					else
 						illegal_insn = 1'b1;
 				end
@@ -1012,11 +1071,150 @@ module DatapathPipelined (
 					branch_taken = 1;
 				end
 			end
+			OpJalr: begin
+				we = 1'b1;
+				output_d = execute_state[169-:32] + 4;
+				branch_pc = (rs1_data + e_imm_i_sext) & ~32'b00000000000000000000000000000001;
+				branch_taken = 1;
+			end
+			OpJal: begin
+				we = 1'b1;
+				output_d = execute_state[169-:32] + 4;
+				branch_pc = execute_state[169-:32] + e_imm_j_sext;
+				branch_taken = 1;
+			end
+			OpAuipc: begin
+				we = 1'b1;
+				output_d = execute_state[169-:32] + e_imm_u;
+			end
+			OpLoad: begin
+				we = 1'b1;
+				output_d = rs1_data + e_imm_i_sext;
+			end
+			OpStore: begin
+				we = 1'b0;
+				output_d = rs1_data + e_imm_s_sext;
+			end
 			default: illegal_insn = 1'b1;
 		endcase
 	end
+	always @(posedge clk)
+		if (rst)
+			div_valid <= 7'b0000000;
+		else begin
+			begin : sv2v_autoblock_3
+				reg signed [31:0] i;
+				for (i = 0; i < 6; i = i + 1)
+					begin
+						div_valid[i + 1] <= div_valid[i];
+						div_pipe[i + 1] <= div_pipe[i];
+					end
+			end
+			if (e_is_div) begin
+				div_valid[0] <= 1'b1;
+				div_pipe[0] <= {sv2v_cast_32(execute_state[169-:32]), sv2v_cast_32(execute_state[137-:32]), (rs1_data[31] != rs2_data[31]) && (execute_state[120:118] == 3'b100), rs1_data[31] && (execute_state[120:118] == 3'b110), rs2_data == 32'sd0, rs1_data};
+			end
+			else
+				div_valid[0] <= 1'b0;
+		end
 	wire [31:0] m_pc_current;
-	wire [31:0] m_insn;
+	wire [31:0] m_insn = memory_state[143-:32];
+	reg m_we = memory_state[10];
+	wire [31:0] m_output;
+	wire m_re;
+	wire [6:0] m_insn_opcode = m_insn[6:0];
+	wire d_insn_lb = (m_insn_opcode == OpLoad) && (m_insn[14:12] == 3'b000);
+	wire d_insn_lh = (m_insn_opcode == OpLoad) && (m_insn[14:12] == 3'b001);
+	wire d_insn_lw = (m_insn_opcode == OpLoad) && (m_insn[14:12] == 3'b010);
+	wire d_insn_lbu = (m_insn_opcode == OpLoad) && (m_insn[14:12] == 3'b100);
+	wire d_insn_lhu = (m_insn_opcode == OpLoad) && (m_insn[14:12] == 3'b101);
+	wire d_insn_sb = (m_insn_opcode == OpStore) && (m_insn[14:12] == 3'b000);
+	wire d_insn_sh = (m_insn_opcode == OpStore) && (m_insn[14:12] == 3'b001);
+	wire d_insn_sw = (m_insn_opcode == OpStore) && (m_insn[14:12] == 3'b010);
+	wire [1:0] load_byte_offset = memory_state[49:48];
+	reg [7:0] selected_byte;
+	reg [31:0] m_data;
+	assign addr_to_dmem = memory_state[79-:32] & 32'h0000fffc;
+	wire wm_bypass_active = ((wb_state[108:102] == OpLoad) && (wb_state[5-:5] == memory_state[4-:5])) && (memory_state[4-:5] != 0);
+	wire [31:0] m_store_data = (wm_bypass_active ? w_data : memory_state[47-:32]);
+	always @(*) begin
+		if (_sv2v_0)
+			;
+		case (load_byte_offset)
+			2'b00: selected_byte = load_data_from_dmem[7:0];
+			2'b01: selected_byte = load_data_from_dmem[15:8];
+			2'b10: selected_byte = load_data_from_dmem[23:16];
+			2'b11: selected_byte = load_data_from_dmem[31:24];
+			default: selected_byte = 8'b00000000;
+		endcase
+		store_data_to_dmem = 1'sb0;
+		store_we_to_dmem = 1'sb0;
+		m_data = 1'sb0;
+		if (d_insn_lb)
+			m_data = {{24 {selected_byte[7]}}, selected_byte};
+		else if (d_insn_lh) begin
+			if (load_byte_offset == 2'b00)
+				m_data = {{16 {load_data_from_dmem[15]}}, load_data_from_dmem[15:0]};
+			else if (load_byte_offset == 2'b10)
+				m_data = {{16 {load_data_from_dmem[31]}}, load_data_from_dmem[31:16]};
+		end
+		else if (d_insn_lw)
+			m_data = load_data_from_dmem;
+		else if (d_insn_lbu)
+			m_data = {24'b000000000000000000000000, selected_byte};
+		else if (d_insn_lhu) begin
+			if (load_byte_offset == 2'b00)
+				m_data = {16'b0000000000000000, load_data_from_dmem[15:0]};
+			else if (load_byte_offset == 2'b10)
+				m_data = {16'b0000000000000000, load_data_from_dmem[31:16]};
+		end
+		else if (d_insn_sb) begin
+			if (memory_state[49:48] == 2'b00) begin
+				store_we_to_dmem = 4'b0001;
+				store_data_to_dmem = {24'b000000000000000000000000, m_store_data[7:0]};
+			end
+			else if (memory_state[49:48] == 2'b01) begin
+				store_we_to_dmem = 4'b0010;
+				store_data_to_dmem = {16'b0000000000000000, m_store_data[7:0], 8'b00000000};
+			end
+			else if (memory_state[49:48] == 2'b10) begin
+				store_we_to_dmem = 4'b0100;
+				store_data_to_dmem = {8'b00000000, m_store_data[7:0], 16'b0000000000000000};
+			end
+			else if (memory_state[49:48] == 2'b11) begin
+				store_we_to_dmem = 4'b1000;
+				store_data_to_dmem = {m_store_data[7:0], 24'b000000000000000000000000};
+			end
+		end
+		else if (d_insn_sh) begin
+			if (load_byte_offset == 2'b00) begin
+				store_we_to_dmem = 4'b0011;
+				store_data_to_dmem = {16'b0000000000000000, m_store_data[15:0]};
+			end
+			else if (load_byte_offset == 2'b10) begin
+				store_we_to_dmem = 4'b1100;
+				store_data_to_dmem = {m_store_data[15:0], 16'b0000000000000000};
+			end
+		end
+		else if (d_insn_sw) begin
+			store_we_to_dmem = 4'b1111;
+			store_data_to_dmem = m_store_data;
+		end
+	end
+	reg [31:0] final_div_result;
+	always @(*) begin
+		if (_sv2v_0)
+			;
+		final_div_result = 0;
+		if (div_pipe[6][49:47] == 3'b100)
+			final_div_result = (div_pipe[6][32] ? 32'hffffffff : (div_pipe[6][34] ? ~div_q + 1 : div_q));
+		else if (div_pipe[6][49:47] == 3'b101)
+			final_div_result = (div_pipe[6][32] ? 32'hffffffff : div_q);
+		else if (div_pipe[6][49:47] == 3'b110)
+			final_div_result = (div_pipe[6][32] ? div_pipe[6][31-:32] : (div_pipe[6][33] ? ~div_rem + 1 : div_rem));
+		else if (div_pipe[6][49:47] == 3'b111)
+			final_div_result = (div_pipe[6][32] ? div_pipe[6][31-:32] : div_rem);
+	end
 	function automatic [4:0] sv2v_cast_5;
 		input reg [4:0] inp;
 		sv2v_cast_5 = inp;
@@ -1024,22 +1222,17 @@ module DatapathPipelined (
 	always @(posedge clk)
 		if (rst)
 			memory_state <= 176'h00000000000000000000000400000000000000000000;
+		else if (div_valid[6])
+			memory_state <= {sv2v_cast_32(div_pipe[6][98-:32]), sv2v_cast_32(div_pipe[6][66-:32]), 32'd1, final_div_result, 32'd0, div_pipe[6][46:42], 11'h400};
+		else if (e_non_div_stall || e_is_div)
+			memory_state <= 176'h00000000000000000000000200000000000000000000;
 		else
-			memory_state <= {sv2v_cast_32(execute_state[169-:32]), sv2v_cast_32(execute_state[137-:32]), sv2v_cast_32(execute_state[105-:32]), output_d, sv2v_cast_32(execute_state[41-:32]), e_rd, we, sv2v_cast_5(execute_state[9-:5]), sv2v_cast_5(execute_state[4-:5])};
+			memory_state <= {sv2v_cast_32(execute_state[169-:32]), sv2v_cast_32(execute_state[137-:32]), sv2v_cast_32(execute_state[105-:32]), output_d, rs2_data, e_rd, we, sv2v_cast_5(execute_state[9-:5]), sv2v_cast_5(execute_state[4-:5])};
 	wire [255:0] m_disasm;
 	Disasm #(.PREFIX("M")) disasm_3memory(
 		.insn(memory_state[143-:32]),
 		.disasm(m_disasm)
 	);
-	reg [31:0] m_data;
-	always @(*) begin
-		if (_sv2v_0)
-			;
-		addr_to_dmem = 1'sb0;
-		store_data_to_dmem = 1'sb0;
-		store_we_to_dmem = 4'b0000;
-		m_data = 1'sb0;
-	end
 	wire [31:0] w_pc_current;
 	wire [31:0] w_insn;
 	wire [6:0] wb_insn_opcode = wb_state[108:102];
@@ -1057,7 +1250,6 @@ module DatapathPipelined (
 	always @(*) begin
 		if (_sv2v_0)
 			;
-		w_data = wb_state[37-:32];
 		w_rd = wb_state[5-:5];
 		if (wb_insn_ecall && (wb_state[101-:32] == 32'd1))
 			halt = 1'b1;
