@@ -1309,234 +1309,21 @@ module MemorySingleCycle (
 		end
 	initial _sv2v_0 = 0;
 endmodule
-`default_nettype none
-module txuartlite (
-	i_clk,
-	i_reset,
-	i_wr,
-	i_data,
-	o_uart_tx,
-	o_busy
-);
-	parameter [4:0] TIMING_BITS = 5'd24;
-	localparam TB = TIMING_BITS;
-	parameter [TB - 1:0] CLOCKS_PER_BAUD = 217;
-	input wire i_clk;
-	input wire i_reset;
-	input wire i_wr;
-	input wire [7:0] i_data;
-	output reg o_uart_tx;
-	output wire o_busy;
-	localparam [3:0] TXUL_BIT_ZERO = 4'h0;
-	localparam [3:0] TXUL_STOP = 4'h8;
-	localparam [3:0] TXUL_IDLE = 4'hf;
-	reg [TB - 1:0] baud_counter;
-	reg [3:0] state;
-	reg [7:0] lcl_data;
-	reg r_busy;
-	reg zero_baud_counter;
-	initial r_busy = 1'b1;
-	initial state = TXUL_IDLE;
-	always @(posedge i_clk)
-		if (i_reset) begin
-			r_busy <= 1'b1;
-			state <= TXUL_IDLE;
-		end
-		else if (!zero_baud_counter)
-			r_busy <= 1'b1;
-		else if (state > TXUL_STOP) begin
-			state <= TXUL_IDLE;
-			r_busy <= 1'b0;
-			if (i_wr && !r_busy) begin
-				r_busy <= 1'b1;
-				state <= TXUL_BIT_ZERO;
-			end
-		end
-		else begin
-			r_busy <= 1'b1;
-			if (state <= TXUL_STOP)
-				state <= state + 1'b1;
-			else
-				state <= TXUL_IDLE;
-		end
-	assign o_busy = r_busy;
-	initial lcl_data = 8'hff;
-	always @(posedge i_clk)
-		if (i_reset)
-			lcl_data <= 8'hff;
-		else if (i_wr && !r_busy)
-			lcl_data <= i_data;
-		else if (zero_baud_counter)
-			lcl_data <= {1'b1, lcl_data[7:1]};
-	initial o_uart_tx = 1'b1;
-	always @(posedge i_clk)
-		if (i_reset)
-			o_uart_tx <= 1'b1;
-		else if (i_wr && !r_busy)
-			o_uart_tx <= 1'b0;
-		else if (zero_baud_counter)
-			o_uart_tx <= lcl_data[0];
-	initial zero_baud_counter = 1'b1;
-	initial baud_counter = 0;
-	always @(posedge i_clk)
-		if (i_reset) begin
-			zero_baud_counter <= 1'b1;
-			baud_counter <= 0;
-		end
-		else begin
-			zero_baud_counter <= baud_counter == 1;
-			if (state == TXUL_IDLE) begin
-				baud_counter <= 0;
-				zero_baud_counter <= 1'b1;
-				if (i_wr && !r_busy) begin
-					baud_counter <= CLOCKS_PER_BAUD - 1'b1;
-					zero_baud_counter <= 1'b0;
-				end
-			end
-			else if (!zero_baud_counter)
-				baud_counter <= baud_counter - 1'b1;
-			else if (state > TXUL_STOP) begin
-				baud_counter <= 0;
-				zero_baud_counter <= 1'b1;
-			end
-			else if (state == TXUL_STOP)
-				baud_counter <= CLOCKS_PER_BAUD - 2;
-			else
-				baud_counter <= CLOCKS_PER_BAUD - 1'b1;
-		end
-endmodule
-`default_nettype none
-module rxuartlite (
-	i_clk,
-	i_reset,
-	i_uart_rx,
-	o_wr,
-	o_data
-);
-	parameter TIMER_BITS = 10;
-	parameter [TIMER_BITS - 1:0] CLOCKS_PER_BAUD = 217;
-	localparam TB = TIMER_BITS;
-	localparam [3:0] RXUL_BIT_ZERO = 4'h0;
-	localparam [3:0] RXUL_BIT_ONE = 4'h1;
-	localparam [3:0] RXUL_BIT_TWO = 4'h2;
-	localparam [3:0] RXUL_BIT_THREE = 4'h3;
-	localparam [3:0] RXUL_BIT_FOUR = 4'h4;
-	localparam [3:0] RXUL_BIT_FIVE = 4'h5;
-	localparam [3:0] RXUL_BIT_SIX = 4'h6;
-	localparam [3:0] RXUL_BIT_SEVEN = 4'h7;
-	localparam [3:0] RXUL_STOP = 4'h8;
-	localparam [3:0] RXUL_WAIT = 4'h9;
-	localparam [3:0] RXUL_IDLE = 4'hf;
-	input wire i_clk;
-	input wire i_reset;
-	input wire i_uart_rx;
-	output reg o_wr;
-	output reg [7:0] o_data;
-	wire [TB - 1:0] half_baud;
-	reg [3:0] state;
-	assign half_baud = {1'b0, CLOCKS_PER_BAUD[TB - 1:1]};
-	reg [TB - 1:0] baud_counter;
-	reg zero_baud_counter;
-	reg q_uart;
-	reg qq_uart;
-	reg ck_uart;
-	reg [TB - 1:0] chg_counter;
-	reg half_baud_time;
-	reg [7:0] data_reg;
-	initial q_uart = 1'b1;
-	initial qq_uart = 1'b1;
-	initial ck_uart = 1'b1;
-	always @(posedge i_clk)
-		if (i_reset)
-			{ck_uart, qq_uart, q_uart} <= 3'b111;
-		else
-			{ck_uart, qq_uart, q_uart} <= {qq_uart, q_uart, i_uart_rx};
-	initial chg_counter = {TB {1'b1}};
-	always @(posedge i_clk)
-		if (i_reset)
-			chg_counter <= {TB {1'b1}};
-		else if (qq_uart != ck_uart)
-			chg_counter <= 0;
-		else if (chg_counter != {TB {1'b1}})
-			chg_counter <= chg_counter + 1;
-	initial half_baud_time = 0;
-	always @(posedge i_clk)
-		if (i_reset)
-			half_baud_time <= 0;
-		else
-			half_baud_time <= !ck_uart && (chg_counter >= (half_baud - (1'b1 + 1'b1)));
-	initial state = RXUL_IDLE;
-	always @(posedge i_clk)
-		if (i_reset)
-			state <= RXUL_IDLE;
-		else if (state == RXUL_IDLE) begin
-			state <= RXUL_IDLE;
-			if (!ck_uart && half_baud_time)
-				state <= RXUL_BIT_ZERO;
-		end
-		else if ((state >= RXUL_WAIT) && ck_uart)
-			state <= RXUL_IDLE;
-		else if (zero_baud_counter) begin
-			if (state <= RXUL_STOP)
-				state <= state + 1;
-		end
-	always @(posedge i_clk)
-		if (zero_baud_counter && (state != RXUL_STOP))
-			data_reg <= {qq_uart, data_reg[7:1]};
-	initial o_wr = 1'b0;
-	initial o_data = 8'h00;
-	always @(posedge i_clk)
-		if (i_reset) begin
-			o_wr <= 1'b0;
-			o_data <= 8'h00;
-		end
-		else if ((zero_baud_counter && (state == RXUL_STOP)) && ck_uart) begin
-			o_wr <= 1'b1;
-			o_data <= data_reg;
-		end
-		else
-			o_wr <= 1'b0;
-	initial baud_counter = 0;
-	always @(posedge i_clk)
-		if (i_reset)
-			baud_counter <= 0;
-		else if (((state == RXUL_IDLE) && !ck_uart) && half_baud_time)
-			baud_counter <= CLOCKS_PER_BAUD - 1'b1;
-		else if (state == RXUL_WAIT)
-			baud_counter <= 0;
-		else if (zero_baud_counter && (state < RXUL_STOP))
-			baud_counter <= CLOCKS_PER_BAUD - 1'b1;
-		else if (!zero_baud_counter)
-			baud_counter <= baud_counter - 1'b1;
-	initial zero_baud_counter = 1'b1;
-	always @(posedge i_clk)
-		if (i_reset)
-			zero_baud_counter <= 1'b1;
-		else if (((state == RXUL_IDLE) && !ck_uart) && half_baud_time)
-			zero_baud_counter <= 1'b0;
-		else if (state == RXUL_WAIT)
-			zero_baud_counter <= 1'b1;
-		else if (zero_baud_counter && (state < RXUL_STOP))
-			zero_baud_counter <= 1'b0;
-		else if (baud_counter == 1)
-			zero_baud_counter <= 1'b1;
-endmodule
 module SystemDemo (
 	external_clk_25MHz,
-	ftdi_txd,
 	btn,
 	led,
-	ftdi_rxd,
-	wifi_gpio0
+	gp
 );
-	input external_clk_25MHz;
-	input ftdi_txd;
-	input [6:0] btn;
+	input wire external_clk_25MHz;
+	input wire [6:0] btn;
 	output wire [7:0] led;
-	output wire ftdi_rxd;
-	output wire wifi_gpio0;
-	localparam signed [31:0] MmapOutput = 32'hff001000;
-	localparam signed [31:0] MmapInput = 32'hff002000;
+	output wire [27:0] gp;
+	localparam signed [31:0] MmapGpioStart = 32'hff001000;
+	localparam signed [31:0] LastGpioIndex = 27;
+	localparam signed [31:0] MmapGpioEnd = MmapGpioStart + LastGpioIndex;
+	localparam signed [31:0] MmapLeds = 32'hff002000;
+	localparam signed [31:0] MmapButtons = 32'hff003000;
 	wire clk_proc;
 	wire clk_locked;
 	MyClockGen clock_gen(
@@ -1544,187 +1331,31 @@ module SystemDemo (
 		.clk_proc(clk_proc),
 		.locked(clk_locked)
 	);
-	wire [7:0] rx_data;
-	wire rx_ready;
-	wire [7:0] data2cpu_uart;
-	wire [7:0] data2cpu_cpu;
-	assign data2cpu_uart = (rx_ready ? rx_data : 8'h00);
-	assign led = data2cpu_cpu;
-	wire [7:0] tx_data;
-	wire tx_ready;
-	wire tx_busy;
-	wire [7:0] data2uart_cpu;
-	wire [7:0] data2uart_uart;
-	assign tx_ready = !tx_busy;
-	assign tx_data = data2uart_uart;
-	rxuartlite uart_receive(
-		.i_clk(external_clk_25MHz),
-		.i_reset(1'b0),
-		.i_uart_rx(ftdi_txd),
-		.o_wr(rx_ready),
-		.o_data(rx_data)
-	);
-	wire [31:0] mem_data_addr;
-	wire [31:0] mem_data_to_write;
-	wire [3:0] mem_data_we;
-	DP16KD #(
-		.DATA_WIDTH_A(9),
-		.DATA_WIDTH_B(9),
-		.REGMODE_A("NOREG"),
-		.REGMODE_B("NOREG"),
-		.RESETMODE("SYNC"),
-		.ASYNC_RESET_RELEASE("SYNC"),
-		.WRITEMODE_A("NORMAL"),
-		.WRITEMODE_B("NORMAL")
-	) uart2cpu(
-		.ADA13(1'b0),
-		.ADA12(1'b0),
-		.ADA11(1'b0),
-		.ADA10(1'b0),
-		.ADA9(1'b0),
-		.ADA8(1'b0),
-		.ADA7(1'b0),
-		.ADA6(1'b0),
-		.ADA5(1'b0),
-		.ADA4(1'b0),
-		.ADA3(1'b0),
-		.ADA2(1'b0),
-		.ADA1(1'b0),
-		.ADA0(1'b0),
-		.DIA8(1'b0),
-		.DIA7(data2cpu_uart[7]),
-		.DIA6(data2cpu_uart[6]),
-		.DIA5(data2cpu_uart[5]),
-		.DIA4(data2cpu_uart[4]),
-		.DIA3(data2cpu_uart[3]),
-		.DIA2(data2cpu_uart[2]),
-		.DIA1(data2cpu_uart[1]),
-		.DIA0(data2cpu_uart[0]),
-		.CEA(1'b1),
-		.OCEA(1'b1),
-		.CLKA(external_clk_25MHz),
-		.WEA(rx_ready),
-		.RSTA(1'b0),
-		.ADB13(1'b0),
-		.ADB12(1'b0),
-		.ADB11(1'b0),
-		.ADB10(1'b0),
-		.ADB9(1'b0),
-		.ADB8(1'b0),
-		.ADB7(1'b0),
-		.ADB6(1'b0),
-		.ADB5(1'b0),
-		.ADB4(1'b0),
-		.ADB3(1'b0),
-		.ADB2(1'b0),
-		.ADB1(1'b0),
-		.ADB0(1'b0),
-		.DIB8(1'b0),
-		.DIB7(mem_data_to_write[7]),
-		.DIB6(mem_data_to_write[6]),
-		.DIB5(mem_data_to_write[5]),
-		.DIB4(mem_data_to_write[4]),
-		.DIB3(mem_data_to_write[3]),
-		.DIB2(mem_data_to_write[2]),
-		.DIB1(mem_data_to_write[1]),
-		.DIB0(mem_data_to_write[0]),
-		.DOB8(),
-		.DOB7(data2cpu_cpu[7]),
-		.DOB6(data2cpu_cpu[6]),
-		.DOB5(data2cpu_cpu[5]),
-		.DOB4(data2cpu_cpu[4]),
-		.DOB3(data2cpu_cpu[3]),
-		.DOB2(data2cpu_cpu[2]),
-		.DOB1(data2cpu_cpu[1]),
-		.DOB0(data2cpu_cpu[0]),
-		.CEB(1'b1),
-		.OCEB(1'b1),
-		.CLKB(clk_proc),
-		.WEB((mem_data_addr == MmapInput) && |mem_data_we),
-		.RSTB(1'b0)
-	);
-	txuartlite uart_transmit(
-		.i_clk(external_clk_25MHz),
-		.i_reset(1'b0),
-		.i_wr(tx_ready),
-		.i_data(tx_data),
-		.o_uart_tx(ftdi_rxd),
-		.o_busy(tx_busy)
-	);
-	DP16KD #(
-		.DATA_WIDTH_A(9),
-		.DATA_WIDTH_B(9),
-		.REGMODE_A("NOREG"),
-		.REGMODE_B("NOREG"),
-		.RESETMODE("SYNC"),
-		.ASYNC_RESET_RELEASE("SYNC"),
-		.WRITEMODE_A("NORMAL"),
-		.WRITEMODE_B("NORMAL")
-	) cpu2uart(
-		.ADA13(1'b0),
-		.ADA12(1'b0),
-		.ADA11(1'b0),
-		.ADA10(1'b0),
-		.ADA9(1'b0),
-		.ADA8(1'b0),
-		.ADA7(1'b0),
-		.ADA6(1'b0),
-		.ADA5(1'b0),
-		.ADA4(1'b0),
-		.ADA3(1'b0),
-		.ADA2(1'b0),
-		.ADA1(1'b0),
-		.ADA0(1'b0),
-		.DIA8(1'b0),
-		.DIA7(data2uart_cpu[7]),
-		.DIA6(data2uart_cpu[6]),
-		.DIA5(data2uart_cpu[5]),
-		.DIA4(data2uart_cpu[4]),
-		.DIA3(data2uart_cpu[3]),
-		.DIA2(data2uart_cpu[2]),
-		.DIA1(data2uart_cpu[1]),
-		.DIA0(data2uart_cpu[0]),
-		.CEA(1'b1),
-		.OCEA(1'b1),
-		.CLKA(clk_proc),
-		.WEA((mem_data_addr == MmapOutput) && |mem_data_we),
-		.RSTA(1'b0),
-		.ADB13(1'b0),
-		.ADB12(1'b0),
-		.ADB11(1'b0),
-		.ADB10(1'b0),
-		.ADB9(1'b0),
-		.ADB8(1'b0),
-		.ADB7(1'b0),
-		.ADB6(1'b0),
-		.ADB5(1'b0),
-		.ADB4(1'b0),
-		.ADB3(1'b0),
-		.ADB2(1'b0),
-		.ADB1(1'b0),
-		.ADB0(1'b0),
-		.DOB8(),
-		.DOB7(data2uart_uart[7]),
-		.DOB6(data2uart_uart[6]),
-		.DOB5(data2uart_uart[5]),
-		.DOB4(data2uart_uart[4]),
-		.DOB3(data2uart_uart[3]),
-		.DOB2(data2uart_uart[2]),
-		.DOB1(data2uart_uart[1]),
-		.DOB0(data2uart_uart[0]),
-		.CEB(1'b1),
-		.OCEB(1'b1),
-		.CLKB(external_clk_25MHz),
-		.WEB(1'b0),
-		.RSTB(1'b0)
-	);
 	wire [31:0] pc_to_imem;
 	wire [31:0] insn_from_imem;
+	wire [31:0] mem_data_addr;
 	wire [31:0] mem_data_loaded_value;
+	wire [31:0] mem_data_to_write;
+	wire [3:0] mem_data_we;
 	wire [31:0] trace_completed_pc;
 	wire [31:0] trace_completed_insn;
 	wire [31:0] trace_completed_cycle_status;
-	assign data2uart_cpu = mem_data_to_write[7:0];
+	wire is_gpio_write = (mem_data_we != 0) && ((MmapGpioStart <= mem_data_addr) && (mem_data_addr <= MmapGpioEnd));
+	wire is_led_write = (mem_data_we != 0) && (mem_data_addr == MmapLeds);
+	wire is_button_read = mem_data_addr == MmapButtons;
+	reg [7:0] led_reg;
+	reg [27:0] gpio_reg;
+	always @(posedge clk_proc)
+		if (!clk_locked) begin
+			led_reg <= 0;
+			gpio_reg <= 0;
+		end
+		else if (is_gpio_write)
+			gpio_reg[mem_data_addr - MmapGpioStart] <= mem_data_to_write[0];
+		else if (is_led_write)
+			led_reg <= mem_data_to_write[7:0];
+	assign gp = gpio_reg;
+	assign led = led_reg;
 	MemorySingleCycle #(.NUM_WORDS(1024)) memory(
 		.rst(!clk_locked),
 		.clk(clk_proc),
@@ -1733,8 +1364,11 @@ module SystemDemo (
 		.addr_to_dmem(mem_data_addr),
 		.load_data_from_dmem(mem_data_loaded_value),
 		.store_data_to_dmem(mem_data_to_write),
-		.store_we_to_dmem((mem_data_addr == MmapOutput ? 4'd0 : mem_data_we))
+		.store_we_to_dmem((is_gpio_write ? 4'd0 : mem_data_we))
 	);
+	wire trace_writeback_pc;
+	wire trace_writeback_insn;
+	wire trace_writeback_cycle_status;
 	DatapathPipelined datapath(
 		.clk(clk_proc),
 		.rst(!clk_locked),
@@ -1743,10 +1377,10 @@ module SystemDemo (
 		.addr_to_dmem(mem_data_addr),
 		.store_data_to_dmem(mem_data_to_write),
 		.store_we_to_dmem(mem_data_we),
-		.load_data_from_dmem((mem_data_addr == MmapInput ? {24'd0, data2cpu_cpu} : mem_data_loaded_value)),
+		.load_data_from_dmem(mem_data_loaded_value),
 		.halt(),
-		.trace_completed_pc(trace_completed_pc),
-		.trace_completed_insn(trace_completed_insn),
-		.trace_completed_cycle_status(trace_completed_cycle_status)
+		.trace_completed_pc(trace_writeback_pc),
+		.trace_completed_insn(trace_writeback_insn),
+		.trace_completed_cycle_status(trace_writeback_cycle_status)
 	);
 endmodule
